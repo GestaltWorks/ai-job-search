@@ -94,8 +94,13 @@ jobs:
           set -e
           if [ -f uv.lock ]; then uv sync --frozen; else uv sync; fi
           if [ -d tests ] || [ -d test ]; then
-            # --with pytest: run the suite even when pytest isn't a declared dep
-            uv run --with pytest pytest -q
+            # Prefer the project's own pytest (its plugins — asyncio etc. —
+            # matter); overlay one only when the project doesn't declare it.
+            if uv run pytest --version >/dev/null 2>&1; then
+              uv run pytest -q
+            else
+              uv run --with pytest pytest -q
+            fi
           else
             echo "::warning::no tests/ directory — the trust floor is dependency-resolution-only here"
           fi
