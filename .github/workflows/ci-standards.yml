@@ -1,0 +1,137 @@
+# AUTO-SYNCED from the LLM Builder Kit. Do not edit here; edit the kit source and re-run sync-standards.ps1.
+
+# The kit's vendored CI floor (SPEC 2.6 + 3.2): every managed repo gets a
+# build-test job that actually exercises the code (auto-detected stack) and a
+# standards-drift job that fails CI when vendored standards diverge from the
+# kit. Secret scanning is Bootstrap-Repo's separate workflow; not duplicated here.
+#
+# Auto-merge (SPEC 2.1) trusts THIS check: a repo qualifies for the switch only
+# after this workflow has demonstrably failed on a real break.
+#
+# Third-party actions are SHA-pinned (supply-chain rule). Tag comments are for
+# humans; the SHA is what runs.
+
+name: ci-standards
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # One detection pass drives every conditional step below. A repo with no
+      # recognizable stack passes with a notice (docs/config repos), but any
+      # detected stack MUST build and its tests MUST pass.
+      - name: Detect stack
+        id: detect
+        shell: bash
+        run: |
+          has_node=false; node_dir=.; pkg_mgr=npm
+          if [ -f package.json ]; then has_node=true; node_dir=.
+          elif [ -f web/package.json ]; then has_node=true; node_dir=web; fi
+          if [ "$has_node" = true ] && [ -f "$node_dir/pnpm-lock.yaml" ]; then pkg_mgr=pnpm; fi
+          has_py=false
+          if [ -f pyproject.toml ]; then has_py=true; fi
+          has_dotnet=false
+          if compgen -G "*.sln" > /dev/null || compgen -G "**/*.csproj" > /dev/null; then has_dotnet=true; fi
+          echo "has_node=$has_node"    >> "$GITHUB_OUTPUT"
+          echo "node_dir=$node_dir"    >> "$GITHUB_OUTPUT"
+          echo "pkg_mgr=$pkg_mgr"      >> "$GITHUB_OUTPUT"
+          echo "has_py=$has_py"        >> "$GITHUB_OUTPUT"
+          echo "has_dotnet=$has_dotnet" >> "$GITHUB_OUTPUT"
+          echo "detected: node=$has_node($node_dir,$pkg_mgr) python=$has_py dotnet=$has_dotnet"
+          if [ "$has_node" = false ] && [ "$has_py" = false ] && [ "$has_dotnet" = false ]; then
+            echo "::notice::No buildable stack detected (node/python/dotnet); build-test passes vacuously."
+          fi
+
+      # --- Node ---
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        if: steps.detect.outputs.has_node == 'true' && steps.detect.outputs.pkg_mgr == 'pnpm'
+        with:
+          package_json_file: ${{ steps.detect.outputs.node_dir }}/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.detect.outputs.has_node == 'true'
+        with:
+          node-version: 22
+      - name: Node install + build + test
+        if: steps.detect.outputs.has_node == 'true'
+        shell: bash
+        working-directory: ${{ steps.detect.outputs.node_dir }}
+        run: |
+          set -e
+          if [ "${{ steps.detect.outputs.pkg_mgr }}" = "pnpm" ]; then
+            pnpm install --frozen-lockfile
+            runner="pnpm run"
+          else
+            if [ -f package-lock.json ]; then npm ci; else npm install; fi
+            runner="npm run"
+          fi
+          has_script() { node -e "process.exit(((require('./package.json').scripts||{})['$1'])?0:1)"; }
+          if has_script build; then $runner build; else echo "::notice::no build script"; fi
+          if has_script test; then $runner test; else echo "::warning::no test script — the trust floor is build-only here"; fi
+
+      # --- Python (uv) ---
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        if: steps.detect.outputs.has_py == 'true'
+      - name: Python sync + tests
+        if: steps.detect.outputs.has_py == 'true'
+        shell: bash
+        run: |
+          set -e
+          if [ -f uv.lock ]; then uv sync --frozen; else uv sync; fi
+          if [ -d tests ] || [ -d test ]; then
+            uv run pytest -q
+          else
+            echo "::warning::no tests/ directory — the trust floor is dependency-resolution-only here"
+          fi
+
+      # --- .NET (preinstalled on ubuntu runners; no extra action to pin) ---
+      - name: Dotnet build + test
+        if: steps.detect.outputs.has_dotnet == 'true'
+        shell: bash
+        run: |
+          set -e
+          dotnet build --nologo -clp:ErrorsOnly
+          if compgen -G "**/*Tests*.csproj" > /dev/null || compgen -G "**/*.Tests.csproj" > /dev/null; then
+            dotnet test --nologo --no-build
+          else
+            echo "::warning::no test projects — the trust floor is build-only here"
+          fi
+
+  standards-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      KIT_TOKEN: ${{ secrets.KIT_READ_TOKEN }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Kit access?
+        id: kit
+        shell: bash
+        run: |
+          if [ -n "$KIT_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::KIT_READ_TOKEN secret not set; drift check skipped. Add a read-only token for GestaltWorks/llm-builder-kit to enable."
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        if: steps.kit.outputs.enabled == 'true'
+        with:
+          repository: GestaltWorks/llm-builder-kit
+          token: ${{ secrets.KIT_READ_TOKEN }}
+          path: .kit
+      - name: Vendored standards in sync with the kit
+        if: steps.kit.outputs.enabled == 'true'
+        shell: pwsh
+        run: ./.kit/sync-standards.ps1 -RepoPath . -Check
+
