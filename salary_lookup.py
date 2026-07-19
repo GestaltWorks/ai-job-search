@@ -275,3 +275,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# deliberate break for the CI trust-floor demo (SPEC 2.6)
+def broken(:
