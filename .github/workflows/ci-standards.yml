@@ -70,9 +70,10 @@ jobs:
         run: |
           set -e
           if [ "${{ steps.detect.outputs.pkg_mgr }}" = "pnpm" ]; then
-            # Pin pnpm 9 explicitly: corepack's default resolves to v10, which
-            # rejects these repos' v9 lockfiles/build-script policy.
-            npm install -g pnpm@9
+            # Current pnpm 10 (matches how the repos are managed). Corepack's
+            # default (10.0.0) predates ignoredBuiltDependencies and errors on
+            # these repos' workspace files — never rely on it.
+            npm install -g pnpm@10
             pnpm install --frozen-lockfile
             runner="pnpm run"
           else
@@ -93,7 +94,8 @@ jobs:
           set -e
           if [ -f uv.lock ]; then uv sync --frozen; else uv sync; fi
           if [ -d tests ] || [ -d test ]; then
-            uv run pytest -q
+            # --with pytest: run the suite even when pytest isn't a declared dep
+            uv run --with pytest pytest -q
           else
             echo "::warning::no tests/ directory — the trust floor is dependency-resolution-only here"
           fi
