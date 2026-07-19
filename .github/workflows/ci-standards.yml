@@ -70,9 +70,9 @@ jobs:
         run: |
           set -e
           if [ "${{ steps.detect.outputs.pkg_mgr }}" = "pnpm" ]; then
-            # corepack honors a packageManager pin when present; plain install otherwise
-            corepack enable 2>/dev/null || true
-            pnpm --version >/dev/null 2>&1 || npm install -g pnpm@9
+            # Pin pnpm 9 explicitly: corepack's default resolves to v10, which
+            # rejects these repos' v9 lockfiles/build-script policy.
+            npm install -g pnpm@9
             pnpm install --frozen-lockfile
             runner="pnpm run"
           else
