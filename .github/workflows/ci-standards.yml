@@ -41,15 +41,20 @@ jobs:
           if [ "$has_node" = true ] && [ -f "$node_dir/pnpm-lock.yaml" ]; then pkg_mgr=pnpm; fi
           has_py=false
           if [ -f pyproject.toml ]; then has_py=true; fi
+          # Script repos: loose .py files with no project file still get a
+          # syntax floor (compileall) — a SyntaxError must fail CI.
+          has_loose_py=false
+          if [ "$has_py" = false ] && find . -name '*.py' -not -path './.git/*' -print -quit | grep -q .; then has_loose_py=true; fi
           has_dotnet=false
           if compgen -G "*.sln" > /dev/null || compgen -G "**/*.csproj" > /dev/null; then has_dotnet=true; fi
           echo "has_node=$has_node"    >> "$GITHUB_OUTPUT"
           echo "node_dir=$node_dir"    >> "$GITHUB_OUTPUT"
           echo "pkg_mgr=$pkg_mgr"      >> "$GITHUB_OUTPUT"
           echo "has_py=$has_py"        >> "$GITHUB_OUTPUT"
+          echo "has_loose_py=$has_loose_py" >> "$GITHUB_OUTPUT"
           echo "has_dotnet=$has_dotnet" >> "$GITHUB_OUTPUT"
-          echo "detected: node=$has_node($node_dir,$pkg_mgr) python=$has_py dotnet=$has_dotnet"
-          if [ "$has_node" = false ] && [ "$has_py" = false ] && [ "$has_dotnet" = false ]; then
+          echo "detected: node=$has_node($node_dir,$pkg_mgr) python=$has_py loose_py=$has_loose_py dotnet=$has_dotnet"
+          if [ "$has_node" = false ] && [ "$has_py" = false ] && [ "$has_loose_py" = false ] && [ "$has_dotnet" = false ]; then
             echo "::notice::No buildable stack detected (node/python/dotnet); build-test passes vacuously."
           fi
 
@@ -93,6 +98,14 @@ jobs:
           else
             echo "::warning::no tests/ directory — the trust floor is dependency-resolution-only here"
           fi
+
+      # --- Loose Python scripts (no project file): syntax floor ---
+      - name: Python syntax floor (compileall)
+        if: steps.detect.outputs.has_loose_py == 'true'
+        shell: bash
+        run: |
+          python3 -m compileall -q . -x '(\.git|node_modules|\.venv)' || { echo "::error::Python syntax errors found"; exit 1; }
+          echo "::warning::script-only repo — the trust floor is syntax-only here (no tests)"
 
       # --- .NET (preinstalled on ubuntu runners; no extra action to pin) ---
       - name: Dotnet build + test
